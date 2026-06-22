@@ -411,6 +411,7 @@ class _Sidebar extends StatelessWidget {
               child: GestureDetector(
                 onTap: () {
                   if (item.id == 'dashboard') context.go('/dashboard');
+                    if (item.id == 'settings') context.go('/settings');
                 },
                 child: Container(
                   width: 40,

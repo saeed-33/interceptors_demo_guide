@@ -22,6 +22,8 @@ class AppLogInterceptor extends Interceptor {
 
   @override
   void onRequest(RequestOptions options, RequestInterceptorHandler handler) {
+    print(
+        "==== logger interceptor : log request , URL ( ${options.uri} )");
     _logger.i(
       '➡️ REQUEST\n'
       'Method : ${options.method}\n'
@@ -34,6 +36,9 @@ class AppLogInterceptor extends Interceptor {
 
   @override
   void onResponse(Response response, ResponseInterceptorHandler handler) {
+    print(
+        "==== logger interceptor : log response , URL ( ${response.requestOptions.uri} )");
+
     _logger.d(
       '✅ RESPONSE [${response.statusCode}]\n'
       'URL  : ${response.requestOptions.uri}\n'
@@ -44,6 +49,9 @@ class AppLogInterceptor extends Interceptor {
 
   @override
   void onError(DioException err, ErrorInterceptorHandler handler) {
+    print(
+        "==== logger interceptor : log error , URL ( ${err.requestOptions.uri} )");
+
     _logger.e(
       '❌ ERROR\n'
       'URL    : ${err.requestOptions.uri}\n'
@@ -58,6 +66,10 @@ class AppLogInterceptor extends Interceptor {
 
   /// Remove sensitive headers before logging (Authorization, API keys)
   Map<String, dynamic> _sanitizeHeaders(Map<String, dynamic> headers) {
+
+    print(
+        "==== logger interceptor : remove sensitive headers before logging");
+
     final sanitized = Map<String, dynamic>.from(headers);
     sanitized.remove('Authorization');
     sanitized.remove('X-API-Key');

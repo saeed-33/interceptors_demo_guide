@@ -6,6 +6,7 @@ import 'package:interceptors_demo/features/auth/presentation/pages/login_page.da
 import 'package:interceptors_demo/features/posts/presentation/pages/posts_page.dart';
 import 'package:interceptors_demo/features/splash/presentation/pages/splash_page.dart';
 import 'package:interceptors_demo/features/dashboard/presentation/pages/dashboard_page.dart';
+import 'package:interceptors_demo/features/settings/presentation/pages/settings_page.dart';
 
 class AppRouter {
   static final navigatorKey = GlobalKey<NavigatorState>();
@@ -15,16 +16,20 @@ class AppRouter {
     initialLocation: '/splash',
     routes: [
       GoRoute(path: '/splash', builder: (_, __) => const SplashPage()),
-      GoRoute(path: '/login', builder: (_, __) => const LoginPage()),
+      GoRoute(path: '/login',  builder: (_, __) => const LoginPage()),
       GoRoute(
         path: '/posts',
         builder: (_, state) => PostsPage(postId: state.uri.queryParameters['id']),
       ),
       GoRoute(path: '/dashboard', builder: (_, __) => const DashboardPage()),
+      GoRoute(path: '/settings',  builder: (_, __) => const SettingsPage()),
     ],
     errorBuilder: (context, state) => Scaffold(
       backgroundColor: const Color(0xFF0D1117),
-      body: Center(child: Text('Page not found: ${state.uri}', style: const TextStyle(color: Colors.white))),
+      body: Center(
+        child: Text('Page not found: ${state.uri}',
+            style: const TextStyle(color: Colors.white)),
+      ),
     ),
   );
 }
