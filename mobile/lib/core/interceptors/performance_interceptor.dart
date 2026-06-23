@@ -5,11 +5,11 @@
 // Reports metrics to analytics. Cancels requests exceeding hard timeout.
 
 import 'package:dio/dio.dart';
-import 'package:logger/logger.dart';
+
+import 'package:interceptors_demo/core/history/request_history.dart';
+import 'package:interceptors_demo/core/logs/log_store.dart';
 
 class PerformanceInterceptor extends Interceptor {
-  final Logger _logger = Logger();
-
   /// Warn threshold: log a warning if request takes longer than this
   final Duration warnThreshold;
 
@@ -59,6 +59,7 @@ class PerformanceInterceptor extends Interceptor {
     final startMs = options.extra['_perf_start'] as int?;
     if (startMs == null) return;
 
+    final requestId = options.extra['request_id'] as String? ?? options.path;
     final durationMs = DateTime.now().millisecondsSinceEpoch - startMs;
     final duration = Duration(milliseconds: durationMs);
 
@@ -73,14 +74,29 @@ class PerformanceInterceptor extends Interceptor {
     // Emit to analytics
     onMetric?.call(metric);
 
+    // Record in in-memory history for the dashboard
+    RequestHistory.instance.record(
+      method: options.method,
+      path: options.path,
+      statusCode: statusCode,
+      durationMs: durationMs,
+      cacheHit: options.extra['_cacheHit'] == true,
+    );
+
     if (duration > warnThreshold) {
-      _logger.w(
-        '⚠️ SLOW REQUEST: ${options.method} ${options.path} '
-        'took ${durationMs}ms (threshold: ${warnThreshold.inMilliseconds}ms)',
+      logInterceptor(
+        'performance',
+        '⚠️ SLOW REQUEST ${options.method} ${options.path} '
+            'took ${durationMs}ms (threshold: ${warnThreshold.inMilliseconds}ms)',
+        api: options.path,
+        requestId: requestId,
       );
     } else {
-      _logger.d(
+      logInterceptor(
+        'performance',
         '⚡ ${options.method} ${options.path} completed in ${durationMs}ms',
+        api: options.path,
+        requestId: requestId,
       );
     }
   }

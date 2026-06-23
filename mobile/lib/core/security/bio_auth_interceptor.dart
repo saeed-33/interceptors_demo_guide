@@ -7,6 +7,9 @@
 import 'package:local_auth/local_auth.dart';
 import 'package:dio/dio.dart';
 import 'package:flutter/services.dart';
+import 'package:flutter/foundation.dart';
+
+import 'package:interceptors_demo/core/logs/log_store.dart';
 
 class BioAuthInterceptor {
   static final instance = BioAuthInterceptor._();
@@ -16,11 +19,40 @@ class BioAuthInterceptor {
   bool _isAuthenticated = false;
 
   /// Call when app resumes from background
-  Future<void> authenticate() async {
+  /// [api] is the request path or logical group this biometric prompt belongs to.
+  /// [requestId] groups this biometric prompt with the API request it protects.
+  Future<void> authenticate({
+    String api = 'startup',
+    String requestId = 'startup',
+  }) async {
+    logInterceptor(
+      'bio auth',
+      'request biometric authentication',
+      api: api,
+      requestId: requestId,
+    );
+
+    if (kIsWeb) {
+      logInterceptor(
+        'bio auth',
+        'web platform — biometrics unavailable, allow through',
+        api: api,
+        requestId: requestId,
+      );
+      _isAuthenticated = true;
+      return;
+    }
+
     final canAuth = await _auth.canCheckBiometrics ||
         await _auth.isDeviceSupported();
     if (!canAuth) {
-      _isAuthenticated = true; // No biometrics available, allow through
+      logInterceptor(
+        'bio auth',
+        'no biometrics available — allow through',
+        api: api,
+        requestId: requestId,
+      );
+      _isAuthenticated = true;
       return;
     }
 
@@ -32,7 +64,19 @@ class BioAuthInterceptor {
           stickyAuth: true,
         ),
       );
-    } on PlatformException {
+      logInterceptor(
+        'bio auth',
+        'authenticated = $_isAuthenticated',
+        api: api,
+        requestId: requestId,
+      );
+    } on PlatformException catch (e) {
+      logInterceptor(
+        'bio auth',
+        'auth error $e',
+        api: api,
+        requestId: requestId,
+      );
       _isAuthenticated = false;
     }
   }
@@ -53,7 +97,7 @@ class BioAuthDioInterceptor extends Interceptor {
   final List<String> sensitiveEndpoints;
 
   BioAuthDioInterceptor({
-    this.sensitiveEndpoints = const ['/payments', '/profile/delete'],
+    this.sensitiveEndpoints = const ['/profile/delete'],
   });
 
   @override
@@ -61,15 +105,28 @@ class BioAuthDioInterceptor extends Interceptor {
     RequestOptions options,
     RequestInterceptorHandler handler,
   ) async {
+    final requestId = options.extra['request_id'] as String? ?? options.path;
     final needsAuth = sensitiveEndpoints.any((e) => options.path.contains(e));
+    logInterceptor(
+      'bio auth dio',
+      'path=${options.path} needsAuth=$needsAuth',
+      api: options.path,
+      requestId: requestId,
+    );
 
     if (!needsAuth) {
       return handler.next(options);
     }
 
-    await _bioAuth.authenticate();
+    await _bioAuth.authenticate(api: options.path, requestId: requestId);
 
     if (!_bioAuth.isAuthenticated) {
+      logInterceptor(
+        'bio auth dio',
+        'authentication failed — reject request',
+        api: options.path,
+        requestId: requestId,
+      );
       return handler.reject(
         DioException(
           requestOptions: options,
@@ -78,6 +135,12 @@ class BioAuthDioInterceptor extends Interceptor {
       );
     }
 
+    logInterceptor(
+      'bio auth dio',
+      'authentication passed — proceed',
+      api: options.path,
+      requestId: requestId,
+    );
     return handler.next(options);
   }
 }

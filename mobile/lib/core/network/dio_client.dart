@@ -4,7 +4,6 @@
 // ORDER MATTERS — interceptors run top-to-bottom on request, bottom-to-top on response/error.
 
 import 'package:dio/dio.dart';
-import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 
 import '../interceptors/network_interceptor.dart';
 import '../interceptors/log_interceptor.dart';
@@ -20,11 +19,12 @@ import '../interceptors/state_interceptor.dart';
 import '../navigation/app_router.dart';
 import '../security/root_detection_interceptor.dart';
 import '../security/bio_auth_interceptor.dart';
+import '../storage/token_storage.dart';
 
 class DioClient {
   static Dio create({
     required NetworkCubit networkCubit,
-    String baseUrl = 'http://localhost:3000/api',
+    String baseUrl = 'http://127.0.0.1:3000/api',
   }) {
     final dio = Dio(
       BaseOptions(
@@ -48,7 +48,7 @@ class DioClient {
 
       // 3. 🔐 Bio Auth — require biometrics for sensitive endpoints
       BioAuthDioInterceptor(
-        sensitiveEndpoints: ['/payments', '/profile/delete'],
+        sensitiveEndpoints: ['/profile/delete'],
       ),
 
       // 4. ✅ Validate request data before sending
@@ -60,7 +60,7 @@ class DioClient {
       // 6. 🔑 Auth — attach Bearer token, handle 401 refresh
       AuthInterceptor(
         dio: dio,
-        secureStorage: const FlutterSecureStorage(),
+        tokenStorage: TokenStorage.create(),
       ),
 
       // 7. 🔐 Encrypt — encrypt body for sensitive endpoints

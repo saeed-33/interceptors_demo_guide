@@ -8,7 +8,9 @@
 import 'package:root_check/root_check.dart';
 import 'package:dio/dio.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/foundation.dart';
 
+import 'package:interceptors_demo/core/logs/log_store.dart';
 import 'package:interceptors_demo/core/navigation/app_router.dart';
 
 class RootDetectionInterceptor {
@@ -19,8 +21,32 @@ class RootDetectionInterceptor {
 
   /// Call at app startup. Checks for root and warns/blocks.
   Future<void> check() async {
+    logInterceptor(
+      'root detection',
+      'check device integrity',
+      api: 'startup',
+      requestId: 'startup',
+    );
+
+    if (kIsWeb) {
+      logInterceptor(
+        'root detection',
+        'web platform — skip root check',
+        api: 'startup',
+        requestId: 'startup',
+      );
+      _isRooted = false;
+      return;
+    }
+
     try {
       _isRooted = (await RootCheck.isRooted) ?? false;
+      logInterceptor(
+        'root detection',
+        'rooted = $_isRooted',
+        api: 'startup',
+        requestId: 'startup',
+      );
 
       if (_isRooted) {
         // Delay until first frame is rendered
@@ -30,6 +56,12 @@ class RootDetectionInterceptor {
       }
     } catch (_) {
       // Root check failed — treat as not rooted (avoid false positives)
+      logInterceptor(
+        'root detection',
+        'check failed — assume not rooted',
+        api: 'startup',
+        requestId: 'startup',
+      );
       _isRooted = false;
     }
   }
@@ -77,9 +109,23 @@ class RootDetectionDioInterceptor extends Interceptor {
 
   @override
   void onRequest(RequestOptions options, RequestInterceptorHandler handler) {
-    options.headers['X-Device-Rooted'] = _detector.isRooted.toString();
+    final requestId = options.extra['request_id'] as String? ?? options.path;
+    final rootedFlag = _detector.isRooted.toString();
+    options.headers['X-Device-Rooted'] = rootedFlag;
+    logInterceptor(
+      'root detection dio',
+      'set X-Device-Rooted = $rootedFlag',
+      api: options.path,
+      requestId: requestId,
+    );
 
     if (blockRooted && _detector.isRooted) {
+      logInterceptor(
+        'root detection dio',
+        'blocking rooted device',
+        api: options.path,
+        requestId: requestId,
+      );
       return handler.reject(
         DioException(
           requestOptions: options,

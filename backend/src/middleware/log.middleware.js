@@ -9,7 +9,7 @@ const logMiddleware = (req, res, next) => {
     const duration = Date.now() - start;
     const log = {
       method: req.method,
-      path: req.path,
+      path: req.originalUrl || req.path,
       status: res.statusCode,
       duration_ms: duration,
       screen_origin: screen,

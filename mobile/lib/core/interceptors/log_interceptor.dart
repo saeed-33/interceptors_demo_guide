@@ -7,6 +7,8 @@
 import 'package:dio/dio.dart';
 import 'package:logger/logger.dart';
 
+import 'package:interceptors_demo/core/logs/log_store.dart';
+
 class AppLogInterceptor extends Interceptor {
   final Logger _logger = Logger(
     printer: PrettyPrinter(
@@ -22,13 +24,20 @@ class AppLogInterceptor extends Interceptor {
 
   @override
   void onRequest(RequestOptions options, RequestInterceptorHandler handler) {
-    print(
-        "==== logger interceptor : log request , URL ( ${options.uri} )");
+    final requestId = options.extra['request_id'] as String? ?? options.path;
+    final msg = 'log REQUEST ${options.method} ${options.path}';
+    print('==== logger interceptor : $msg');
+    LogStore.instance.add(
+      'logger',
+      msg,
+      api: options.path,
+      requestId: requestId,
+    );
     _logger.i(
       '➡️ REQUEST\n'
       'Method : ${options.method}\n'
       'URL    : ${options.uri}\n'
-      'Headers: ${_sanitizeHeaders(options.headers)}\n'
+      'Headers: ${_sanitizeHeaders(options.headers, api: options.path, requestId: requestId)}\n'
       'Body   : ${options.data}',
     );
     super.onRequest(options, handler);
@@ -36,8 +45,16 @@ class AppLogInterceptor extends Interceptor {
 
   @override
   void onResponse(Response response, ResponseInterceptorHandler handler) {
-    print(
-        "==== logger interceptor : log response , URL ( ${response.requestOptions.uri} )");
+    final requestId = response.requestOptions.extra['request_id'] as String? ??
+        response.requestOptions.path;
+    final msg = 'log RESPONSE ${response.statusCode} ${response.requestOptions.method} ${response.requestOptions.path}';
+    print('==== logger interceptor : $msg');
+    LogStore.instance.add(
+      'logger',
+      msg,
+      api: response.requestOptions.path,
+      requestId: requestId,
+    );
 
     _logger.d(
       '✅ RESPONSE [${response.statusCode}]\n'
@@ -49,8 +66,16 @@ class AppLogInterceptor extends Interceptor {
 
   @override
   void onError(DioException err, ErrorInterceptorHandler handler) {
-    print(
-        "==== logger interceptor : log error , URL ( ${err.requestOptions.uri} )");
+    final requestId = err.requestOptions.extra['request_id'] as String? ??
+        err.requestOptions.path;
+    final msg = 'log ERROR ${err.response?.statusCode} ${err.requestOptions.method} ${err.requestOptions.path}';
+    print('==== logger interceptor : $msg');
+    LogStore.instance.add(
+      'logger',
+      msg,
+      api: err.requestOptions.path,
+      requestId: requestId,
+    );
 
     _logger.e(
       '❌ ERROR\n'
@@ -65,10 +90,19 @@ class AppLogInterceptor extends Interceptor {
   }
 
   /// Remove sensitive headers before logging (Authorization, API keys)
-  Map<String, dynamic> _sanitizeHeaders(Map<String, dynamic> headers) {
-
-    print(
-        "==== logger interceptor : remove sensitive headers before logging");
+  Map<String, dynamic> _sanitizeHeaders(
+    Map<String, dynamic> headers, {
+    required String api,
+    required String requestId,
+  }) {
+    const msg = 'remove sensitive headers before logging';
+    print('==== logger interceptor : $msg');
+    LogStore.instance.add(
+      'logger',
+      msg,
+      api: api,
+      requestId: requestId,
+    );
 
     final sanitized = Map<String, dynamic>.from(headers);
     sanitized.remove('Authorization');

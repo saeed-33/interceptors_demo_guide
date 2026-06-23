@@ -7,6 +7,8 @@
 
 import 'package:dio/dio.dart';
 
+import 'package:interceptors_demo/core/logs/log_store.dart';
+
 typedef ValidationSchema = Map<String, FieldRule>;
 
 class FieldRule {
@@ -45,11 +47,24 @@ final Map<String, ValidationSchema> _requestSchemas = {
 class ValidatorInterceptor extends Interceptor {
   @override
   void onRequest(RequestOptions options, RequestInterceptorHandler handler) {
+    final requestId = options.extra['request_id'] as String? ?? options.path;
+    logInterceptor(
+      'validator',
+      'validate request ${options.method} ${options.path}',
+      api: options.path,
+      requestId: requestId,
+    );
     final schema = _requestSchemas[options.path];
 
     if (schema != null && options.data is Map<String, dynamic>) {
       final errors = _validate(options.data as Map<String, dynamic>, schema);
       if (errors.isNotEmpty) {
+        logInterceptor(
+          'validator',
+          'validation failed $errors',
+          api: options.path,
+          requestId: requestId,
+        );
         return handler.reject(
           DioException(
             requestOptions: options,
@@ -60,17 +75,37 @@ class ValidatorInterceptor extends Interceptor {
       }
     }
 
+    logInterceptor(
+      'validator',
+      'request valid',
+      api: options.path,
+      requestId: requestId,
+    );
     handler.next(options);
   }
 
   @override
   void onResponse(Response response, ResponseInterceptorHandler handler) {
+    final requestId = response.requestOptions.extra['request_id'] as String? ??
+        response.requestOptions.path;
+    logInterceptor(
+      'validator',
+      'validate response ${response.statusCode} for ${response.requestOptions.path}',
+      api: response.requestOptions.path,
+      requestId: requestId,
+    );
     // Validate response has expected top-level structure
     if (response.data is Map) {
       final data = response.data as Map<String, dynamic>;
 
       // Our API always returns { success, data } or { success, error }
       if (!data.containsKey('success')) {
+        logInterceptor(
+          'validator',
+          "response missing 'success' field",
+          api: response.requestOptions.path,
+          requestId: requestId,
+        );
         return handler.reject(
           DioException(
             requestOptions: response.requestOptions,
@@ -82,6 +117,12 @@ class ValidatorInterceptor extends Interceptor {
       }
     }
 
+    logInterceptor(
+      'validator',
+      'response valid',
+      api: response.requestOptions.path,
+      requestId: requestId,
+    );
     handler.next(response);
   }
 

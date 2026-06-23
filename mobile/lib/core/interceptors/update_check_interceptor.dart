@@ -9,6 +9,7 @@ import 'package:dio/dio.dart';
 import 'package:flutter/material.dart';
 import 'package:package_info_plus/package_info_plus.dart';
 
+import 'package:interceptors_demo/core/logs/log_store.dart';
 import 'package:interceptors_demo/core/navigation/app_router.dart';
 
 class UpdateCheckInterceptor extends Interceptor {
@@ -19,22 +20,49 @@ class UpdateCheckInterceptor extends Interceptor {
     Response response,
     ResponseInterceptorHandler handler,
   ) async {
+    final requestId = response.requestOptions.extra['request_id'] as String? ??
+        response.requestOptions.path;
     final minVersion = response.headers.value('X-App-Min-Version');
     final latestVersion = response.headers.value('X-App-Latest-Version');
+
+    logInterceptor(
+      'update check',
+      'min=$minVersion latest=$latestVersion',
+      api: response.requestOptions.path,
+      requestId: requestId,
+    );
 
     if (minVersion != null || latestVersion != null) {
       final info = await PackageInfo.fromPlatform();
       final current = _parseVersion(info.version);
+      logInterceptor(
+        'update check',
+        'current=${info.version}',
+        api: response.requestOptions.path,
+        requestId: requestId,
+      );
 
       if (minVersion != null) {
         final min = _parseVersion(minVersion);
         if (_isOlderThan(current, min) && !_updateDialogShown) {
+          logInterceptor(
+            'update check',
+            'force update required',
+            api: response.requestOptions.path,
+            requestId: requestId,
+          );
           _updateDialogShown = true;
           _showForceUpdateDialog();
         }
       } else if (latestVersion != null) {
         final latest = _parseVersion(latestVersion);
         if (_isOlderThan(current, latest) && !_updateDialogShown) {
+          logInterceptor(
+            'update check',
+            'soft update available',
+            api: response.requestOptions.path,
+            requestId: requestId,
+          );
           _updateDialogShown = true;
           _showSoftUpdateDialog(latestVersion);
         }

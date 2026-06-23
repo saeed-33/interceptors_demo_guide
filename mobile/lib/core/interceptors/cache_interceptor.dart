@@ -7,6 +7,9 @@
 import 'package:dio/dio.dart';
 import 'package:hive/hive.dart';
 
+import 'package:interceptors_demo/core/history/request_history.dart';
+import 'package:interceptors_demo/core/logs/log_store.dart';
+
 const String _cacheBoxName = 'http_cache';
 
 class CacheInterceptor extends Interceptor {
@@ -20,13 +23,28 @@ class CacheInterceptor extends Interceptor {
     RequestOptions options,
     RequestInterceptorHandler handler,
   ) async {
+    final requestId = options.extra['request_id'] as String? ?? options.path;
+
     // Only cache GET requests
     if (options.method.toUpperCase() != 'GET') {
       return handler.next(options);
     }
 
+    logInterceptor(
+      'cache',
+      'lookup cache for ${options.path}',
+      api: options.path,
+      requestId: requestId,
+    );
+
     // Allow callers to bypass cache via extra options
     if (options.extra['noCache'] == true) {
+      logInterceptor(
+        'cache',
+        'bypass cache requested',
+        api: options.path,
+        requestId: requestId,
+      );
       return handler.next(options);
     }
 
@@ -38,6 +56,20 @@ class CacheInterceptor extends Interceptor {
       final expiry = DateTime.parse(cached['expiry'] as String);
       if (DateTime.now().isBefore(expiry)) {
         // Cache HIT — return immediately, skip network
+        logInterceptor(
+          'cache',
+          'cache HIT for $cacheKey',
+          api: options.path,
+          requestId: requestId,
+        );
+        options.extra['_cacheHit'] = true;
+        RequestHistory.instance.record(
+          method: options.method,
+          path: options.path,
+          statusCode: 200,
+          durationMs: 0,
+          cacheHit: true,
+        );
         return handler.resolve(
           Response(
             requestOptions: options,
@@ -48,7 +80,20 @@ class CacheInterceptor extends Interceptor {
         );
       }
       // Expired — remove from cache
+      logInterceptor(
+        'cache',
+        'cache expired for $cacheKey',
+        api: options.path,
+        requestId: requestId,
+      );
       await box.delete(cacheKey);
+    } else {
+      logInterceptor(
+        'cache',
+        'cache MISS for $cacheKey',
+        api: options.path,
+        requestId: requestId,
+      );
     }
 
     return handler.next(options);
@@ -59,6 +104,8 @@ class CacheInterceptor extends Interceptor {
     Response response,
     ResponseInterceptorHandler handler,
   ) async {
+    final requestId = response.requestOptions.extra['request_id'] as String? ??
+        response.requestOptions.path;
     if (response.requestOptions.method.toUpperCase() == 'GET' &&
         response.statusCode == 200) {
       // Determine TTL from Cache-Control header or use default
@@ -67,6 +114,12 @@ class CacheInterceptor extends Interceptor {
       final box = await Hive.openBox<Map>(_cacheBoxName);
       final cacheKey = _buildKey(response.requestOptions);
 
+      logInterceptor(
+        'cache',
+        'store response in cache ($cacheKey, ttl=${ttl.inSeconds}s)',
+        api: response.requestOptions.path,
+        requestId: requestId,
+      );
       await box.put(cacheKey, {
         'data': response.data,
         'expiry': DateTime.now().add(ttl).toIso8601String(),
@@ -95,12 +148,24 @@ class CacheInterceptor extends Interceptor {
 
   /// Manually invalidate all cached responses
   static Future<void> clearAll() async {
+    logInterceptor(
+      'cache',
+      'clear all cached responses',
+      api: 'cache',
+      requestId: 'cache',
+    );
     final box = await Hive.openBox<Map>(_cacheBoxName);
     await box.clear();
   }
 
   /// Invalidate a specific endpoint
   static Future<void> invalidate(String path) async {
+    logInterceptor(
+      'cache',
+      'invalidate cache for $path',
+      api: 'cache',
+      requestId: 'cache',
+    );
     final box = await Hive.openBox<Map>(_cacheBoxName);
     final keysToDelete = box.keys.where((k) => k.toString().contains(path));
     for (final key in keysToDelete) {

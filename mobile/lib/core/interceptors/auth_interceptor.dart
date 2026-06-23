@@ -6,38 +6,73 @@
 // On refresh failure, logs out the user and redirects to login.
 
 import 'package:dio/dio.dart';
-import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 import 'package:go_router/go_router.dart';
 
+import 'package:interceptors_demo/core/logs/log_store.dart';
 import 'package:interceptors_demo/core/navigation/app_router.dart';
+import 'package:interceptors_demo/core/storage/token_storage.dart';
 
 class AuthInterceptor extends Interceptor {
   final Dio _dio;
-  final FlutterSecureStorage _secureStorage;
+  final TokenStorage _tokenStorage;
   bool _isRefreshing = false;
 
   // Queue of requests that were waiting for token refresh
   final List<_PendingRequest> _pendingRequests = [];
 
+  /// Public auth endpoints that must never send an Authorization header.
+  static const _publicAuthPaths = {
+    '/auth/login',
+    '/auth/register',
+    '/auth/refresh',
+    '/auth/logout',
+  };
+
   AuthInterceptor({
     required Dio dio,
-    FlutterSecureStorage? secureStorage,
+    TokenStorage? tokenStorage,
   })  : _dio = dio,
-        _secureStorage = secureStorage ?? const FlutterSecureStorage();
+        _tokenStorage = tokenStorage ?? TokenStorage.create();
 
   @override
   Future<void> onRequest(
     RequestOptions options,
     RequestInterceptorHandler handler,
   ) async {
-    // Skip auth for public endpoints
-    if (options.extra['skipAuth'] == true) {
+    final requestId = options.extra['request_id'] as String? ?? options.path;
+
+    // Skip auth for public endpoints (login, register, refresh, logout).
+    // We also remove any stale Authorization header so these requests never
+    // send a token, even if one happens to be in storage.
+    final isPublic = options.extra['skipAuth'] == true ||
+        _publicAuthPaths.any((p) => options.path.startsWith(p));
+    if (isPublic) {
+      options.headers.remove('Authorization');
+      logInterceptor(
+        'auth',
+        'skip auth for ${options.path}',
+        api: options.path,
+        requestId: requestId,
+      );
       return handler.next(options);
     }
 
-    final token = await _secureStorage.read(key: 'access_token');
+    final token = await _tokenStorage.read('access_token');
     if (token != null) {
       options.headers['Authorization'] = 'Bearer $token';
+      logInterceptor(
+        'auth',
+        'attach bearer token to ${options.path}',
+        api: options.path,
+        requestId: requestId,
+      );
+    } else {
+      logInterceptor(
+        'auth',
+        'no token available for ${options.path}',
+        api: options.path,
+        requestId: requestId,
+      );
     }
     return handler.next(options);
   }
@@ -47,12 +82,28 @@ class AuthInterceptor extends Interceptor {
     DioException err,
     ErrorInterceptorHandler handler,
   ) async {
+    final requestId = err.requestOptions.extra['request_id'] as String? ??
+        err.requestOptions.path;
+
     if (err.response?.statusCode != 401) {
       return handler.next(err);
     }
 
+    logInterceptor(
+      'auth',
+      'received 401 for ${err.requestOptions.path}',
+      api: err.requestOptions.path,
+      requestId: requestId,
+    );
+
     // If already refreshing, queue this request
     if (_isRefreshing) {
+      logInterceptor(
+        'auth',
+        'token refresh in progress — queue request',
+        api: err.requestOptions.path,
+        requestId: requestId,
+      );
       final completer = _PendingRequest(err.requestOptions, handler);
       _pendingRequests.add(completer);
       return;
@@ -61,9 +112,15 @@ class AuthInterceptor extends Interceptor {
     _isRefreshing = true;
 
     try {
-      final refreshToken = await _secureStorage.read(key: 'refresh_token');
+      final refreshToken = await _tokenStorage.read('refresh_token');
       if (refreshToken == null) throw Exception('No refresh token');
 
+      logInterceptor(
+        'auth',
+        'refresh access token',
+        api: err.requestOptions.path,
+        requestId: requestId,
+      );
       // Call refresh endpoint (skip auth interceptor to avoid loops)
       final refreshResponse = await _dio.post(
         '/auth/refresh',
@@ -71,8 +128,16 @@ class AuthInterceptor extends Interceptor {
         options: Options(extra: {'skipAuth': true}),
       );
 
-      final newToken = refreshResponse.data['access_token'] as String;
-      await _secureStorage.write(key: 'access_token', value: newToken);
+      final newToken = refreshResponse.data['data']['access_token'] as String;
+      final newRefreshToken = refreshResponse.data['data']['refresh_token'] as String;
+      await _tokenStorage.write('access_token', newToken);
+      await _tokenStorage.write('refresh_token', newRefreshToken);
+      logInterceptor(
+        'auth',
+        'token refreshed successfully',
+        api: err.requestOptions.path,
+        requestId: requestId,
+      );
 
       // Retry all pending requests with new token
       for (final pending in _pendingRequests) {
@@ -86,9 +151,15 @@ class AuthInterceptor extends Interceptor {
       err.requestOptions.headers['Authorization'] = 'Bearer $newToken';
       final retried = await _dio.fetch(err.requestOptions);
       return handler.resolve(retried);
-    } catch (_) {
+    } catch (e) {
       // Refresh failed — clear tokens and go to login
-      await _secureStorage.deleteAll();
+      logInterceptor(
+        'auth',
+        'refresh failed — log out ($e)',
+        api: err.requestOptions.path,
+        requestId: requestId,
+      );
+      await _tokenStorage.deleteAll();
       _pendingRequests.clear();
 
       // Navigate to login screen

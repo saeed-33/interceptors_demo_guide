@@ -24,11 +24,15 @@ const PORT = process.env.PORT || 3000;
 app.use(helmet());
 
 // ─── CORS ────────────────────────────────────────────────────────────────────
+// Permissive CORS for the demo. Reflects the request origin so preflight works
+// from localhost, 127.0.0.1, or any other host the Flutter web app is served on.
 app.use(cors({
-  origin: ['http://localhost:*', '*'],
-  methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE'],
+  origin: (origin, callback) => callback(null, true),
+  methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
   allowedHeaders: ['Content-Type', 'Authorization', 'X-Encrypted', 'X-Soft-Delete', 'X-Device-Rooted', 'X-Screen-Origin'],
   exposedHeaders: ['X-App-Min-Version', 'X-App-Latest-Version', 'X-Encrypted', 'X-Cache'],
+  credentials: true,
+  optionsSuccessStatus: 200,
 }));
 
 // ─── Rate Limiting ────────────────────────────────────────────────────────────
@@ -65,6 +69,11 @@ app.use(versionMiddleware);
 
 // ─── Soft Delete Normalization ────────────────────────────────────────────────
 app.use(softDeleteMiddleware);
+
+// ─── Response Encryption ──────────────────────────────────────────────────────
+// Must be mounted BEFORE routes so it can override res.json() before any route
+// handler sends a response. It only encrypts when req.wasEncrypted is true.
+app.use(encryptResponse);
 
 // ─── Routes ───────────────────────────────────────────────────────────────────
 app.use('/api/auth', authRoutes);

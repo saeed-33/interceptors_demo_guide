@@ -9,6 +9,8 @@ import 'package:dio/dio.dart';
 import 'package:flutter_bloc/flutter_bloc.dart';
 import 'package:equatable/equatable.dart';
 
+import 'package:interceptors_demo/core/logs/log_store.dart';
+
 // ─── Global Network State ────────────────────────────────────────────────────
 
 sealed class NetworkState extends Equatable {
@@ -48,10 +50,41 @@ class NetworkError extends NetworkState {
 class NetworkCubit extends Cubit<NetworkState> {
   NetworkCubit() : super(const NetworkIdle());
 
-  void setLoading(String? path) => emit(NetworkLoading(path: path));
-  void setSuccess(String? path) => emit(NetworkSuccess(path: path));
-  void setError(String message, {int? statusCode}) =>
-      emit(NetworkError(message, statusCode: statusCode));
+  void setLoading(String? path, {String? requestId}) {
+    logInterceptor(
+      'state',
+      'NetworkLoading for $path',
+      api: path ?? 'state',
+      requestId: requestId ?? path ?? 'state',
+    );
+    emit(NetworkLoading(path: path));
+  }
+
+  void setSuccess(String? path, {String? requestId}) {
+    logInterceptor(
+      'state',
+      'NetworkSuccess for $path',
+      api: path ?? 'state',
+      requestId: requestId ?? path ?? 'state',
+    );
+    emit(NetworkSuccess(path: path));
+  }
+
+  void setError(
+    String message, {
+    int? statusCode,
+    String? api,
+    String? requestId,
+  }) {
+    logInterceptor(
+      'state',
+      'NetworkError ($statusCode) $message',
+      api: api ?? 'state',
+      requestId: requestId ?? api ?? 'state',
+    );
+    emit(NetworkError(message, statusCode: statusCode));
+  }
+
   void reset() => emit(const NetworkIdle());
 }
 
@@ -64,17 +97,20 @@ class StateInterceptor extends Interceptor {
 
   @override
   void onRequest(RequestOptions options, RequestInterceptorHandler handler) {
+    final requestId = options.extra['request_id'] as String? ?? options.path;
     // Only update state for requests that opted in
     if (options.extra['trackState'] != false) {
-      networkCubit.setLoading(options.path);
+      networkCubit.setLoading(options.path, requestId: requestId);
     }
     handler.next(options);
   }
 
   @override
   void onResponse(Response response, ResponseInterceptorHandler handler) {
+    final requestId = response.requestOptions.extra['request_id'] as String? ??
+        response.requestOptions.path;
     if (response.requestOptions.extra['trackState'] != false) {
-      networkCubit.setSuccess(response.requestOptions.path);
+      networkCubit.setSuccess(response.requestOptions.path, requestId: requestId);
 
       // Auto-reset to idle after 300ms so the UI can react briefly
       Future.delayed(const Duration(milliseconds: 300), networkCubit.reset);
@@ -84,11 +120,18 @@ class StateInterceptor extends Interceptor {
 
   @override
   void onError(DioException err, ErrorInterceptorHandler handler) {
+    final requestId = err.requestOptions.extra['request_id'] as String? ??
+        err.requestOptions.path;
     if (err.requestOptions.extra['trackState'] != false) {
       final msg = err.error is Exception
           ? err.error.toString().replaceFirst('Exception: ', '')
           : 'Something went wrong';
-      networkCubit.setError(msg, statusCode: err.response?.statusCode);
+      networkCubit.setError(
+        msg,
+        statusCode: err.response?.statusCode,
+        api: err.requestOptions.path,
+        requestId: requestId,
+      );
     }
     handler.next(err);
   }

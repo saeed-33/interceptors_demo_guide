@@ -7,6 +7,8 @@
 
 import 'package:dio/dio.dart';
 
+import 'package:interceptors_demo/core/logs/log_store.dart';
+
 class SoftDeleteInterceptor extends Interceptor {
   /// Field name the backend uses for soft deletes
   final String deletedAtField;
@@ -21,12 +23,19 @@ class SoftDeleteInterceptor extends Interceptor {
 
   @override
   void onRequest(RequestOptions options, RequestInterceptorHandler handler) {
+    final requestId = options.extra['request_id'] as String? ?? options.path;
     final isDelete = options.method.toUpperCase() == 'DELETE';
     final isHardDelete = options.extra['hardDelete'] == true ||
         hardDeletePaths.any((p) => options.path.contains(p));
 
     if (isDelete && !isHardDelete) {
       // Transform DELETE → PATCH with soft delete payload
+      logInterceptor(
+        'soft delete',
+        'transform DELETE ${options.path} → PATCH',
+        api: options.path,
+        requestId: requestId,
+      );
       options.method = 'PATCH';
       options.data = {
         deletedAtField: DateTime.now().toUtc().toIso8601String(),

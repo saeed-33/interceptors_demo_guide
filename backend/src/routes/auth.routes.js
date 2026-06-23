@@ -74,6 +74,26 @@ router.post('/logout', (req, res) => {
   res.json({ success: true, data: { message: 'Logged out successfully' } });
 });
 
+// ─── Auth Guard for protected auth routes ─────────────────────────────────────
+const authGuard = (req, res, next) => {
+  const auth = req.headers.authorization;
+  if (!auth?.startsWith('Bearer ')) {
+    return res.status(401).json({ success: false, error: 'Authentication required' });
+  }
+  try {
+    req.user = jwt.verify(auth.slice(7), JWT_SECRET);
+    next();
+  } catch {
+    res.status(401).json({ success: false, error: 'Invalid or expired token' });
+  }
+};
+
+// POST /api/auth/profile/delete — bio-auth protected demo endpoint
+// The Flutter BioAuthDioInterceptor guards this path.
+router.post('/profile/delete', authGuard, (req, res) => {
+  res.json({ success: true, data: { message: 'Profile deletion request processed (demo)' } });
+});
+
 function _issueTokens(user) {
   const access_token = jwt.sign(
     { sub: user.id, email: user.email, name: user.name },

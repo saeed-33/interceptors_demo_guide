@@ -1,5 +1,9 @@
+import 'package:dio/dio.dart';
 import 'package:flutter/material.dart';
 import 'package:go_router/go_router.dart';
+
+import 'package:interceptors_demo/core/dependencies/app_dependencies.dart';
+import 'package:interceptors_demo/core/interceptors/cache_interceptor.dart';
 import 'package:interceptors_demo/shared/theme/app_theme.dart';
 import 'package:interceptors_demo/shared/widgets/shared_widgets.dart';
 
@@ -13,11 +17,13 @@ class PostsPage extends StatefulWidget {
 
 class _PostsPageState extends State<PostsPage> {
   bool _isLoading = true;
-  bool _isOnline = true;
   bool _cacheHit = false;
   List<_Post> _posts = [];
   int _loadTimeMs = 0;
   String? _selectedId;
+  String? _errorMessage;
+
+  final Dio _dio = AppDependencies.instance.dio;
 
   @override
   void initState() {
@@ -30,96 +36,102 @@ class _PostsPageState extends State<PostsPage> {
     setState(() {
       _isLoading = true;
       _cacheHit = false;
+      _errorMessage = null;
     });
 
     final stopwatch = Stopwatch()..start();
 
-    // Simulate cache hit on repeat load
-    final bool hitCache = !forceRefresh && _posts.isNotEmpty;
-    await Future.delayed(Duration(milliseconds: hitCache ? 45 : 620));
+    try {
+      final response = await _dio.get(
+        '/posts',
+        options: Options(
+          extra: forceRefresh ? {'noCache': true} : null,
+        ),
+      );
 
-    stopwatch.stop();
+      stopwatch.stop();
 
-    if (mounted) {
-      setState(() {
-        _cacheHit = hitCache;
-        _loadTimeMs = stopwatch.elapsedMilliseconds;
-        _isLoading = false;
-        _posts = _mockPosts;
-      });
+      final cacheHeader = response.headers.value('X-Cache');
+      final List<dynamic> rawPosts = response.data['data'] as List<dynamic>;
+
+      if (mounted) {
+        setState(() {
+          _cacheHit = cacheHeader == 'HIT';
+          _loadTimeMs = stopwatch.elapsedMilliseconds;
+          _isLoading = false;
+          _posts = rawPosts.map((p) => _Post.fromJson(p as Map<String, dynamic>)).toList();
+        });
+      }
+    } on DioException catch (e) {
+      stopwatch.stop();
+      if (mounted) {
+        setState(() {
+          _isLoading = false;
+          _loadTimeMs = stopwatch.elapsedMilliseconds;
+          _errorMessage = e.error?.toString() ?? e.message ?? 'Failed to load posts';
+        });
+      }
     }
   }
 
-  void _softDelete(String id) async {
-    showDialog(
-      context: context,
-      builder: (_) => AlertDialog(
+  Future<void> _createPost(String title, String body) async {
+    try {
+      final response = await _dio.post(
+        '/posts',
+        data: {'title': title, 'body': body},
+        options: Options(
+          extra: {'encrypt': true}, // Demo: encrypt request body
+        ),
+      );
+
+      final newPost = _Post.fromJson(response.data['data'] as Map<String, dynamic>);
+      setState(() => _posts.insert(0, newPost));
+      await CacheInterceptor.invalidate('/posts');
+    } on DioException catch (e) {
+      _showError(e.error?.toString() ?? e.message ?? 'Failed to create post');
+    }
+  }
+
+  Future<void> _softDelete(String id) async {
+    try {
+      await _dio.delete('/posts/$id');
+      setState(() => _posts.removeWhere((p) => p.id == id));
+      await CacheInterceptor.invalidate('/posts');
+
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: const Row(
+              children: [
+                Text('🗑️ Post soft-deleted · ', style: TextStyle(color: AppColors.textPrimary)),
+                Text('DELETE → PATCH {deleted_at}', style: TextStyle(color: AppColors.warning, fontFamily: 'monospace', fontSize: 12)),
+              ],
+            ),
+            backgroundColor: AppColors.surface,
+            behavior: SnackBarBehavior.floating,
+            shape: RoundedRectangleBorder(
+              borderRadius: BorderRadius.circular(8),
+              side: const BorderSide(color: AppColors.border),
+            ),
+          ),
+        );
+      }
+    } on DioException catch (e) {
+      _showError(e.error?.toString() ?? e.message ?? 'Failed to delete post');
+    }
+  }
+
+  void _showError(String message) {
+    if (!mounted) return;
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Text(message, style: const TextStyle(color: AppColors.error)),
         backgroundColor: AppColors.surface,
+        behavior: SnackBarBehavior.floating,
         shape: RoundedRectangleBorder(
-          borderRadius: BorderRadius.circular(12),
+          borderRadius: BorderRadius.circular(8),
           side: const BorderSide(color: AppColors.border),
         ),
-        title: const Text('Delete post?', style: TextStyle(color: AppColors.textPrimary, fontSize: 16)),
-        content: Column(
-          mainAxisSize: MainAxisSize.min,
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            const Text(
-              'This will soft-delete the post — it will be marked with deleted_at and hidden from all responses.',
-              style: TextStyle(color: AppColors.textSecondary, fontSize: 13, height: 1.5),
-            ),
-            const SizedBox(height: 12),
-            Container(
-              padding: const EdgeInsets.all(10),
-              decoration: BoxDecoration(
-                color: AppColors.warningDim,
-                borderRadius: BorderRadius.circular(6),
-                border: Border.all(color: AppColors.warning.withOpacity(0.3)),
-              ),
-              child: const Row(
-                children: [
-                  Text('🗑️', style: TextStyle(fontSize: 14)),
-                  SizedBox(width: 8),
-                  Expanded(
-                    child: Text(
-                      'SoftDeleteInterceptor: DELETE → PATCH {deleted_at: now}',
-                      style: TextStyle(color: AppColors.warning, fontSize: 11, fontFamily: 'monospace'),
-                    ),
-                  ),
-                ],
-              ),
-            ),
-          ],
-        ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(context),
-            child: const Text('Cancel', style: TextStyle(color: AppColors.textSecondary)),
-          ),
-          TextButton(
-            onPressed: () {
-              Navigator.pop(context);
-              setState(() => _posts.removeWhere((p) => p.id == id));
-              ScaffoldMessenger.of(context).showSnackBar(
-                SnackBar(
-                  content: const Row(
-                    children: [
-                      Text('🗑️ Post soft-deleted · ', style: TextStyle(color: AppColors.textPrimary)),
-                      Text('deleted_at set', style: TextStyle(color: AppColors.warning, fontFamily: 'monospace', fontSize: 12)),
-                    ],
-                  ),
-                  backgroundColor: AppColors.surface,
-                  behavior: SnackBarBehavior.floating,
-                  shape: RoundedRectangleBorder(
-                    borderRadius: BorderRadius.circular(8),
-                    side: const BorderSide(color: AppColors.border),
-                  ),
-                ),
-              );
-            },
-            child: const Text('Delete', style: TextStyle(color: AppColors.error)),
-          ),
-        ],
       ),
     );
   }
@@ -130,13 +142,10 @@ class _PostsPageState extends State<PostsPage> {
       backgroundColor: AppColors.background,
       body: Column(
         children: [
-          NetworkBanner(isOnline: _isOnline),
           _AppBar(
-            isOnline: _isOnline,
             cacheHit: _cacheHit,
             loadTimeMs: _loadTimeMs,
             onRefresh: () => _loadPosts(forceRefresh: true),
-            onToggleNetwork: () => setState(() => _isOnline = !_isOnline),
           ),
           Expanded(
             child: Row(
@@ -148,28 +157,30 @@ class _PostsPageState extends State<PostsPage> {
                 Expanded(
                   child: _isLoading
                       ? const _LoadingSkeleton()
-                      : Column(
-                          children: [
-                            _PostsHeader(
-                              count: _posts.length,
-                              cacheHit: _cacheHit,
-                              loadTimeMs: _loadTimeMs,
-                            ),
-                            Expanded(
-                              child: ListView.separated(
-                                padding: const EdgeInsets.all(16),
-                                itemCount: _posts.length,
-                                separatorBuilder: (_, __) => const SizedBox(height: 8),
-                                itemBuilder: (_, i) => _PostCard(
-                                  post: _posts[i],
-                                  isSelected: _selectedId == _posts[i].id,
-                                  onTap: () => setState(() => _selectedId = _posts[i].id),
-                                  onDelete: () => _softDelete(_posts[i].id),
+                      : _errorMessage != null
+                          ? _ErrorView(message: _errorMessage!, onRetry: _loadPosts)
+                          : Column(
+                              children: [
+                                _PostsHeader(
+                                  count: _posts.length,
+                                  cacheHit: _cacheHit,
+                                  loadTimeMs: _loadTimeMs,
                                 ),
-                              ),
+                                Expanded(
+                                  child: ListView.separated(
+                                    padding: const EdgeInsets.all(16),
+                                    itemCount: _posts.length,
+                                    separatorBuilder: (_, __) => const SizedBox(height: 8),
+                                    itemBuilder: (_, i) => _PostCard(
+                                      post: _posts[i],
+                                      isSelected: _selectedId == _posts[i].id,
+                                      onTap: () => setState(() => _selectedId = _posts[i].id),
+                                      onDelete: () => _softDelete(_posts[i].id),
+                                    ),
+                                  ),
+                                ),
+                              ],
                             ),
-                          ],
-                        ),
                 ),
 
                 // ─── Detail Panel ────────────────────────────────────────
@@ -239,7 +250,7 @@ class _PostsPageState extends State<PostsPage> {
                   borderRadius: BorderRadius.circular(6),
                 ),
                 child: const Text(
-                  '✅ ValidatorInterceptor will check title (min 3) and body (min 10) before sending',
+                  '✅ ValidatorInterceptor checks title/body.\n🔐 EncryptInterceptor encrypts the body before sending.',
                   style: TextStyle(color: AppColors.accent, fontSize: 11, height: 1.4),
                 ),
               ),
@@ -254,15 +265,13 @@ class _PostsPageState extends State<PostsPage> {
           ElevatedButton(
             onPressed: () {
               Navigator.pop(context);
-              final newPost = _Post(
-                id: DateTime.now().millisecondsSinceEpoch.toString(),
-                title: titleCtrl.text.isEmpty ? 'New Post' : titleCtrl.text,
-                body: bodyCtrl.text.isEmpty ? 'Post content goes here.' : bodyCtrl.text,
-                author: 'demo@example.com',
-                createdAt: DateTime.now(),
-                tags: ['new'],
-              );
-              setState(() => _posts.insert(0, newPost));
+              final title = titleCtrl.text.trim();
+              final body = bodyCtrl.text.trim();
+              if (title.length < 3 || body.length < 10) {
+                _showError('Title min 3 chars, body min 10 chars');
+                return;
+              }
+              _createPost(title, body);
             },
             child: const Text('Create'),
           ),
@@ -272,20 +281,43 @@ class _PostsPageState extends State<PostsPage> {
   }
 }
 
+// ─── Error View ───────────────────────────────────────────────────────────────
+class _ErrorView extends StatelessWidget {
+  final String message;
+  final VoidCallback onRetry;
+  const _ErrorView({required this.message, required this.onRetry});
+
+  @override
+  Widget build(BuildContext context) {
+    return Center(
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          const Icon(Icons.error_outline, color: AppColors.error, size: 40),
+          const SizedBox(height: 12),
+          Text(message, style: const TextStyle(color: AppColors.textSecondary, fontSize: 13)),
+          const SizedBox(height: 16),
+          ElevatedButton.icon(
+            onPressed: onRetry,
+            icon: const Icon(Icons.refresh, size: 16),
+            label: const Text('Retry'),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
 // ─── App Bar ─────────────────────────────────────────────────────────────────
 class _AppBar extends StatelessWidget {
-  final bool isOnline;
   final bool cacheHit;
   final int loadTimeMs;
   final VoidCallback onRefresh;
-  final VoidCallback onToggleNetwork;
 
   const _AppBar({
-    required this.isOnline,
     required this.cacheHit,
     required this.loadTimeMs,
     required this.onRefresh,
-    required this.onToggleNetwork,
   });
 
   @override
@@ -334,18 +366,6 @@ class _AppBar extends StatelessWidget {
               ),
             ),
 
-          // Toggle network (demo)
-          Tooltip(
-            message: isOnline ? 'Simulate offline' : 'Restore connection',
-            child: IconButton(
-              onPressed: onToggleNetwork,
-              icon: Icon(
-                isOnline ? Icons.wifi : Icons.wifi_off,
-                color: isOnline ? AppColors.success : AppColors.error,
-                size: 18,
-              ),
-            ),
-          ),
           IconButton(
             onPressed: onRefresh,
             icon: const Icon(Icons.refresh, color: AppColors.textSecondary, size: 18),
@@ -392,6 +412,7 @@ class _Sidebar extends StatelessWidget {
       _SideItem('posts', '📄', 'Posts'),
       _SideItem('dashboard', '⚡', 'Interceptors'),
       _SideItem('settings', '⚙️', 'Settings'),
+      _SideItem('logs', '📋', 'Logs'),
     ];
 
     return Container(
@@ -411,7 +432,8 @@ class _Sidebar extends StatelessWidget {
               child: GestureDetector(
                 onTap: () {
                   if (item.id == 'dashboard') context.go('/dashboard');
-                    if (item.id == 'settings') context.go('/settings');
+                  if (item.id == 'settings') context.go('/settings');
+                  if (item.id == 'logs') context.go('/logs');
                 },
                 child: Container(
                   width: 40,
@@ -553,16 +575,20 @@ class _PostCard extends StatelessWidget {
                   style: const TextStyle(color: AppColors.textMuted, fontSize: 11),
                 ),
                 const Spacer(),
-                ...post.tags.map((t) => Padding(
-                  padding: const EdgeInsets.only(left: 4),
-                  child: InterceptorBadge(label: t, color: AppColors.textMuted),
-                )),
+                Text(
+                  _formatDate(post.createdAt),
+                  style: const TextStyle(color: AppColors.textMuted, fontSize: 11),
+                ),
               ],
             ),
           ],
         ),
       ),
     );
+  }
+
+  String _formatDate(DateTime date) {
+    return '${date.day}/${date.month}/${date.year}';
   }
 }
 
@@ -630,9 +656,11 @@ class _DetailPanel extends StatelessWidget {
                   // Interceptors that served this request
                   const Text('INTERCEPTORS FIRED', style: TextStyle(color: AppColors.textMuted, fontSize: 10, letterSpacing: 1.2, fontWeight: FontWeight.w600)),
                   const SizedBox(height: 10),
-                  _interceptorFiredRow('💾', 'CacheInterceptor', 'X-Cache: HIT', AppColors.tagCache),
-                  _interceptorFiredRow('⚡', 'PerformanceInterceptor', '45ms · ✓ fast', AppColors.tagPerf),
-                  _interceptorFiredRow('📋', 'LogInterceptor', 'GET /posts/${post.id} 200', AppColors.tagLog),
+                  _interceptorFiredRow('💾', 'CacheInterceptor', 'Respects Cache-Control / X-Cache', AppColors.tagCache),
+                  _interceptorFiredRow('⚡', 'PerformanceInterceptor', 'Measures request duration', AppColors.tagPerf),
+                  _interceptorFiredRow('📋', 'AppLogInterceptor', 'Logs to terminal', AppColors.tagLog),
+                  _interceptorFiredRow('🗑️', 'SoftDeleteInterceptor', 'DELETE → PATCH {deleted_at}', AppColors.warning),
+                  _interceptorFiredRow('🔐', 'EncryptInterceptor', 'AES-256-CBC on create post', AppColors.tagSecurity),
                 ],
               ),
             ),
@@ -724,16 +752,22 @@ class _LoadingSkeletonState extends State<_LoadingSkeleton> with SingleTickerPro
 class _Post {
   final String id, title, body, author;
   final DateTime createdAt;
-  final List<String> tags;
 
-  const _Post({required this.id, required this.title, required this.body, required this.author, required this.createdAt, required this.tags});
+  const _Post({
+    required this.id,
+    required this.title,
+    required this.body,
+    required this.author,
+    required this.createdAt,
+  });
+
+  factory _Post.fromJson(Map<String, dynamic> json) {
+    return _Post(
+      id: json['id'] as String,
+      title: json['title'] as String,
+      body: json['body'] as String,
+      author: json['author_id'] as String? ?? 'unknown',
+      createdAt: DateTime.tryParse(json['created_at'] as String? ?? '') ?? DateTime.now(),
+    );
+  }
 }
-
-final _mockPosts = [
-  _Post(id: '1', title: 'Network Interceptor Deep Dive', body: 'Learn how connectivity_plus detects network state before every request, preventing silent failures when the device is offline. We explore the full ConnectivityResult enum and edge cases like VPN connections.', author: 'demo@example.com', createdAt: DateTime.now().subtract(const Duration(hours: 2)), tags: ['network', 'dio']),
-  _Post(id: '2', title: 'Auth Token Refresh Strategy', body: 'The AuthInterceptor silently refreshes expired tokens using a refresh token stored in FlutterSecureStorage. Parallel 401 requests are queued and retried after a single refresh — preventing a refresh storm.', author: 'demo@example.com', createdAt: DateTime.now().subtract(const Duration(hours: 5)), tags: ['auth', 'jwt']),
-  _Post(id: '3', title: 'AES-256 Request Encryption', body: 'Sensitive endpoints encrypt their JSON body using AES-256-CBC before transmission. The key is stored in secure storage and rotated periodically. A random IV per request prevents identical payloads from producing the same ciphertext.', author: 'demo@example.com', createdAt: DateTime.now().subtract(const Duration(days: 1)), tags: ['security', 'aes']),
-  _Post(id: '4', title: 'Hive Cache with TTL', body: 'The CacheInterceptor stores GET responses in Hive with configurable TTL. It reads Cache-Control: max-age from server responses and respects them. Cache invalidation is triggered automatically after mutations.', author: 'demo@example.com', createdAt: DateTime.now().subtract(const Duration(days: 2)), tags: ['cache', 'hive']),
-  _Post(id: '5', title: 'Soft Delete vs Hard Delete', body: 'The SoftDeleteInterceptor transforms DELETE into PATCH {deleted_at: now}. Response filtering removes soft-deleted records from all GET responses transparently. Hard deletes require an explicit extra flag.', author: 'demo@example.com', createdAt: DateTime.now().subtract(const Duration(days: 3)), tags: ['soft-delete']),
-  _Post(id: '6', title: 'BLoC + StateInterceptor Bridge', body: 'The StateInterceptor connects the Dio network layer to a global NetworkCubit. Every request emits NetworkLoading; every response emits NetworkSuccess or NetworkError. UI widgets subscribe to this stream for loading overlays.', author: 'demo@example.com', createdAt: DateTime.now().subtract(const Duration(days: 4)), tags: ['bloc', 'state']),
-];

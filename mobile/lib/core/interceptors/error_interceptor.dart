@@ -6,6 +6,8 @@
 
 import 'package:dio/dio.dart';
 
+import 'package:interceptors_demo/core/logs/log_store.dart';
+
 /// Sealed class representing all possible API failures
 sealed class AppException implements Exception {
   final String message;
@@ -49,7 +51,15 @@ class CancelledException extends AppException {
 class ErrorInterceptor extends Interceptor {
   @override
   void onError(DioException err, ErrorInterceptorHandler handler) {
+    final requestId = err.requestOptions.extra['request_id'] as String? ??
+        err.requestOptions.path;
     final appException = _mapException(err);
+    logInterceptor(
+      'error',
+      '${err.requestOptions.method} ${err.requestOptions.path} → ${appException.runtimeType}: ${appException.message}',
+      api: err.requestOptions.path,
+      requestId: requestId,
+    );
     handler.reject(
       DioException(
         requestOptions: err.requestOptions,

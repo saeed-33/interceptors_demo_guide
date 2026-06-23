@@ -1,5 +1,10 @@
+import 'package:dio/dio.dart';
 import 'package:flutter/material.dart';
 import 'package:go_router/go_router.dart';
+
+import 'package:interceptors_demo/core/dependencies/app_dependencies.dart';
+import 'package:interceptors_demo/core/interceptors/error_interceptor.dart';
+import 'package:interceptors_demo/core/storage/token_storage.dart';
 import 'package:interceptors_demo/shared/theme/app_theme.dart';
 import 'package:interceptors_demo/shared/widgets/shared_widgets.dart';
 
@@ -13,6 +18,7 @@ class LoginPage extends StatefulWidget {
 class _LoginPageState extends State<LoginPage> with SingleTickerProviderStateMixin {
   final _emailController = TextEditingController(text: 'demo@example.com');
   final _passwordController = TextEditingController(text: 'password123');
+  final _nameController = TextEditingController(text: 'Demo User');
   final _formKey = GlobalKey<FormState>();
 
   bool _obscurePassword = true;
@@ -25,6 +31,9 @@ class _LoginPageState extends State<LoginPage> with SingleTickerProviderStateMix
 
   late AnimationController _shakeController;
   late Animation<double> _shakeAnimation;
+
+  final Dio _dio = AppDependencies.instance.dio;
+  final TokenStorage _storage = TokenStorage.create();
 
   @override
   void initState() {
@@ -39,6 +48,7 @@ class _LoginPageState extends State<LoginPage> with SingleTickerProviderStateMix
   void dispose() {
     _emailController.dispose();
     _passwordController.dispose();
+    _nameController.dispose();
     _shakeController.dispose();
     super.dispose();
   }
@@ -52,47 +62,91 @@ class _LoginPageState extends State<LoginPage> with SingleTickerProviderStateMix
       _interceptorLog.clear();
     });
 
-    // Simulate interceptor chain firing
-    final steps = [
-      _InterceptorEvent('🌐', 'NetworkInterceptor', 'Connection OK — WiFi', AppColors.tagNetwork, 42),
-      _InterceptorEvent('🔒', 'RootDetection', 'Device is clean', AppColors.tagSecurity, 12),
-      _InterceptorEvent('✅', 'ValidatorInterceptor', 'email ✓  password ✓', AppColors.success, 3),
-      _InterceptorEvent('🔑', 'AuthInterceptor', 'Attaching Bearer token', AppColors.tagAuth, 1),
-      _InterceptorEvent('📋', 'LogInterceptor', 'POST /auth/login → 200', AppColors.tagLog, 187),
-    ];
+    try {
+      final Response response;
+      if (_isRegister) {
+        response = await _dio.post(
+          '/auth/register',
+          data: {
+            'name': _nameController.text,
+            'email': _emailController.text,
+            'password': _passwordController.text,
+          },
+          options: Options(extra: {'skipAuth': true}),
+        );
+      } else {
+        response = await _dio.post(
+          '/auth/login',
+          data: {
+            'email': _emailController.text,
+            'password': _passwordController.text,
+          },
+          options: Options(extra: {'skipAuth': true}),
+        );
+      }
 
-    for (final step in steps) {
-      await Future.delayed(const Duration(milliseconds: 350));
-      if (mounted) setState(() => _interceptorLog.add(step));
-    }
+      final data = response.data['data'] as Map<String, dynamic>;
+      await _storage.write('access_token', data['access_token'] as String);
+      await _storage.write('refresh_token', data['refresh_token'] as String);
 
-    await Future.delayed(const Duration(milliseconds: 300));
+      _addEvent('✅', 'ValidatorInterceptor', 'Request body valid', AppColors.success, 3);
+      _addEvent('🔑', 'AuthInterceptor', 'Tokens stored in secure storage', AppColors.tagAuth, 12);
+      _addEvent('📋', 'AppLogInterceptor', '${_isRegister ? 'POST /auth/register' : 'POST /auth/login'} → ${response.statusCode}', AppColors.tagLog, 187);
 
-    if (mounted) {
-      setState(() => _isLoading = false);
-      context.go('/posts');
+      await Future.delayed(const Duration(milliseconds: 500));
+      if (mounted) {
+        setState(() => _isLoading = false);
+        context.go('/posts');
+      }
+    } on DioException catch (e) {
+      _handleError(e);
+    } catch (e) {
+      setState(() {
+        _isLoading = false;
+        _errorMessage = 'Unexpected error: $e';
+      });
+      _shakeController.forward(from: 0);
     }
   }
 
-  void _submitWithError() async {
-    setState(() {
-      _isLoading = true;
-      _errorMessage = null;
-      _interceptorLog.clear();
-    });
+  void _handleError(DioException e) {
+    final error = e.error;
+    String message;
+    if (error is ValidationException) {
+      message = error.fieldErrors?.values.firstOrNull?.firstOrNull ?? error.message;
+      _addEvent('❌', 'ValidatorInterceptor', message, AppColors.error, 2);
+    } else if (error is UnauthorizedException) {
+      message = error.message;
+      _addEvent('❌', 'ErrorInterceptor', '401 → ${error.runtimeType}', AppColors.error, 145);
+    } else if (error is ServerException) {
+      message = error.message;
+      _addEvent('❌', 'ErrorInterceptor', '${error.statusCode} → ${error.message}', AppColors.error, 145);
+    } else {
+      message = e.message ?? 'Request failed';
+      _addEvent('❌', 'ErrorInterceptor', message, AppColors.error, 145);
+    }
 
-    await Future.delayed(const Duration(milliseconds: 400));
     setState(() {
-      _interceptorLog.add(_InterceptorEvent('✅', 'ValidatorInterceptor', 'email ✓  password ✓', AppColors.success, 2));
-    });
-
-    await Future.delayed(const Duration(milliseconds: 500));
-    setState(() {
-      _interceptorLog.add(_InterceptorEvent('❌', 'ErrorInterceptor', '401 → UnauthorizedException', AppColors.error, 145));
       _isLoading = false;
-      _errorMessage = 'Invalid email or password. (401 Unauthorized)';
+      _errorMessage = message;
     });
+    _shakeController.forward(from: 0);
+  }
 
+  void _addEvent(String emoji, String name, String detail, Color color, int ms) {
+    setState(() => _interceptorLog.add(_InterceptorEvent(emoji, name, detail, color, ms)));
+  }
+
+  void _submitWithError() {
+    // Trigger client-side validation error by clearing password
+    _passwordController.clear();
+    _formKey.currentState?.validate();
+    setState(() {
+      _errorMessage = 'Password is required (client-side validation)';
+      _interceptorLog
+        ..clear()
+        ..add(_InterceptorEvent('❌', 'ValidatorInterceptor', 'password is required', AppColors.error, 2));
+    });
     _shakeController.forward(from: 0);
   }
 
@@ -140,12 +194,24 @@ class _LoginPageState extends State<LoginPage> with SingleTickerProviderStateMix
                         const SizedBox(height: 4),
                         Text(
                           _isRegister
-                              ? 'Start exploring all 14 interceptors'
-                              : 'Sign in to the interceptors demo',
+                              ? 'Register to test all 14 interceptors'
+                              : 'Sign in to the real interceptor demo',
                           style: const TextStyle(color: AppColors.textSecondary, fontSize: 14),
                         ),
 
                         const SizedBox(height: 32),
+
+                        if (_isRegister) ...[
+                          _FormField(
+                            label: 'Name',
+                            controller: _nameController,
+                            validator: (v) {
+                              if (v == null || v.length < 2) return 'Name is required (min 2 chars)';
+                              return null;
+                            },
+                          ),
+                          const SizedBox(height: 14),
+                        ],
 
                         // Email
                         _FormField(
@@ -249,7 +315,7 @@ class _LoginPageState extends State<LoginPage> with SingleTickerProviderStateMix
                               padding: const EdgeInsets.symmetric(vertical: 14),
                               shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
                             ),
-                            child: const Text('Simulate 401 Error', style: TextStyle(fontSize: 13)),
+                            child: const Text('Trigger client validation error', style: TextStyle(fontSize: 13)),
                           ),
                         ),
 
@@ -384,7 +450,7 @@ class _LoginPageState extends State<LoginPage> with SingleTickerProviderStateMix
                       border: Border(top: BorderSide(color: AppColors.border)),
                     ),
                     child: Text(
-                      'Interceptors fire in order: Network → Security → Validator → Auth → Log',
+                      'Full interceptor output is printed to the terminal via print().',
                       style: TextStyle(color: AppColors.textMuted, fontSize: 10, height: 1.5),
                     ),
                   ),
